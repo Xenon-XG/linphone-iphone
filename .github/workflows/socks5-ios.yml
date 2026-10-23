@@ -1,0 +1,83 @@
+name: Experimental SOCKS5 unsigned iOS app
+on:
+  push:
+    branches: [feature/socks5-proxy]
+  workflow_dispatch:
+    inputs:
+      sdk_url:
+        description: Actual public GitHub SDK prerelease socks5-ios-sdk.zip asset URL
+        type: string
+        required: true
+      sdk_sha256:
+        description: SHA256 from that same SDK prerelease
+        type: string
+        required: true
+      prerelease:
+        description: Publish experimental unsigned archive (not installable IPA)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  package-tools:
+    if: github.ref == 'refs/heads/feature/socks5-proxy'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -I scripts/test-socks5-sdk-tools.py -v
+  ios-app:
+    needs: package-tools
+    # Repository variables permit feature-branch-only bootstrap without editing master.
+    # Set them only to a real SDK prerelease asset and its checksum.
+    if: github.ref == 'refs/heads/feature/socks5-proxy' && (inputs.sdk_url != '' || vars.SOCKS5_SDK_URL != '')
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test package wiring and verified extraction
+        run: python3 -I scripts/test-socks5-sdk-tools.py -v
+      - name: Download verified SDK into a fresh directory
+        env:
+          SDK_URL: ${{ inputs.sdk_url || vars.SOCKS5_SDK_URL }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 || vars.SOCKS5_SDK_SHA256 }}
+        run: |
+          # No fake URL and no official SDK substitution on download/build errors.
+          case "$SDK_URL" in https://github.com/*/releases/download/*/socks5-ios-sdk.zip) ;; *) echo 'Expected a real GitHub release asset URL'; exit 1 ;; esac
+          download=$(mktemp -d)
+          extract=$(mktemp -d)
+          curl --fail --location --proto '=https' --tlsv1.2 "$SDK_URL" -o "$download/sdk.zip"
+          python3 -I scripts/unpack-sdk-asset.py "$download/sdk.zip" "$SDK_SHA256" "$extract"
+          python3 -I scripts/connect-local-socks5-sdk.py "$extract/linphone-sdk-swift-ios" --apply
+          cp "$extract/linphone-sdk-swift-ios/SOCKS5_BUILD.json" sdk-build-used.json
+      - name: Compile app against the matching fork SDK and archive unsigned
+        run: |
+          xcodebuild -resolvePackageDependencies -project LinphoneApp.xcodeproj -scheme Linphone
+          xcodebuild -project LinphoneApp.xcodeproj -scheme Linphone -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$PWD/build/Socks5-unsigned.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' archive
+          ditto -c -k --keepParent build/Socks5-unsigned.xcarchive socks5-ios-unsigned-xcarchive.zip
+          shasum -a 256 socks5-ios-unsigned-xcarchive.zip > socks5-ios-unsigned-xcarchive.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-unsigned-app-${{ github.sha }}
+          path: |
+            socks5-ios-unsigned-xcarchive.zip
+            socks5-ios-unsigned-xcarchive.zip.sha256
+            sdk-build-used.json
+          if-no-files-found: error
+      - name: Publish only an experimental unsigned archive
+        if: inputs.prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "socks5-app-${GITHUB_RUN_ID}" socks5-ios-unsigned-xcarchive.zip socks5-ios-unsigned-xcarchive.zip.sha256 sdk-build-used.json \
+            --target "$GITHUB_SHA" --prerelease --title "Experimental unsigned SOCKS5 iOS app ${GITHUB_SHA:0:12}" \
+            --notes 'UNSIGNED XCARCHIVE, NOT AN INSTALLABLE IPA. Requires developer signing/provisioning and valid APNs entitlements. CallKit/PushKit source is retained; this build does not grant APNs credentials. UDP signaling/audio only, symmetric-RTP SBC/PBX required. Compilation is not a successful real-device bidirectional-call test.'

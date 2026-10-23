@@ -151,7 +151,7 @@ class MDMManager {
 		if core.globalState == .On {
 			do {
 				core.stop()
-				try core.start()
+				try core.startWithSocks5Policy()
 			} catch let error {
 				Log.error("[MDMManager] Failed restarting core: error = \(error)")
 			}

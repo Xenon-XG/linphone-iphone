@@ -42,3 +42,90 @@ extension Core {
 	}
 	
 }
+
+// SOCKS5 is an application transport, not a VPN or an embedded proxy server.
+import Security
+
+enum Socks5Settings {
+ // Keep intent outside provisionable LinphoneConfig: a downloaded/reset config
+ // must never turn a user-required proxy into an implicit direct connection.
+ static func preferences() throws -> UserDefaults {
+  guard let group = Bundle.main.object(forInfoDictionaryKey: "APP_GROUP_NAME") as? String,
+        let defaults = UserDefaults(suiteName: group) else {
+   throw CoreError("Shared proxy preferences unavailable. Core remains stopped.")
+  }
+  return defaults
+ }
+ struct Credentials: Codable { let username: String; let password: String }
+ private static let service = "org.linphone.socks5.credentials"
+ private static var query: [String: Any] {
+  [kSecClass as String: kSecClassGenericPassword,
+   kSecAttrService as String: service, kSecAttrAccount as String: "proxy"]
+ }
+ static func readCredentials() throws -> Credentials {
+  var request = query
+  request[kSecReturnData as String] = true
+  request[kSecMatchLimit as String] = kSecMatchLimitOne
+  var item: CFTypeRef?
+  guard SecItemCopyMatching(request as CFDictionary, &item) == errSecSuccess,
+        let data = item as? Data else {
+   throw CoreError("SOCKS5 credentials unavailable. Core remains stopped.")
+  }
+  return try JSONDecoder().decode(Credentials.self, from: data)
+ }
+ static func saveCredentials(username: String, password: String) throws {
+  guard username.utf8.count <= 255, password.utf8.count <= 255,
+        username.isEmpty == password.isEmpty,
+        !username.contains("\0"), !password.contains("\0") else {
+   throw CoreError("SOCKS5 username and password must both be empty or both be 1–255 UTF-8 bytes.")
+  }
+  let data = try JSONEncoder().encode(Credentials(username: username, password: password))
+  let values: [String: Any] = [kSecValueData as String: data,
+    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+  let status = SecItemUpdate(query as CFDictionary, values as CFDictionary)
+  if status == errSecItemNotFound {
+   var insert = query
+   values.forEach { insert[$0.key] = $0.value }
+   guard SecItemAdd(insert as CFDictionary, nil) == errSecSuccess else {
+    throw CoreError("Unable to save SOCKS5 credentials in Keychain.")
+   }
+  } else if status != errSecSuccess {
+   throw CoreError("Unable to update SOCKS5 credentials in Keychain.")
+  }
+ }
+ static func removeCredentials() { SecItemDelete(query as CFDictionary) }
+}
+
+extension Core {
+ // All main-app start/restart paths must use this entry, including provisioning.
+ // The SDK independently checks persisted intent when a shared Core is created.
+ func startWithSocks5Policy() throws {
+  if globalState == .On { return }
+  guard let config = config else { throw CoreError("Core configuration unavailable.") }
+  let preferences = try Socks5Settings.preferences()
+  let required = preferences.bool(forKey: "socks5.required") || config.getBool(section: "socks5", key: "required", defaultValue: false)
+  if required { preferences.set(true, forKey: "socks5.required") }
+  if required {
+   guard !Core.runsInsideExtension() else {
+    throw CoreError("SOCKS5 notification-extension networking is unsupported.")
+   }
+#if LINPHONE_SOCKS5_SDK
+   let secret = try Socks5Settings.readCredentials()
+   let configuredHost: String? = preferences.string(forKey: "socks5.host") ?? config.getString(section: "socks5", key: "host", defaultString: nil)
+   guard let host = configuredHost, !host.isEmpty else {
+    throw CoreError("SOCKS5 proxy address is missing.")
+   }
+   try setSocks5Proxy(host: host, port: preferences.object(forKey: "socks5.port") == nil ? config.getInt(section: "socks5", key: "port", defaultValue: 0) : preferences.integer(forKey: "socks5.port"),
+                     username: secret.username.isEmpty ? nil : secret.username,
+                     password: secret.password.isEmpty ? nil : secret.password)
+#else
+   throw CoreError("SOCKS5 requires the locally built fork SDK. Official SDK startup is blocked.")
+#endif
+  } else {
+#if LINPHONE_SOCKS5_SDK
+   try setSocks5Proxy(host: nil, port: 0, username: nil, password: nil)
+#endif
+  }
+  try start()
+ }
+}

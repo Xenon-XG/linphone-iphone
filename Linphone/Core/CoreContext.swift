@@ -96,7 +96,7 @@ class CoreContext: ObservableObject {
 			AppServices.resetConfig()
 			self.mCore.config?.reload()
 			if startCore {
-				try?core.start()
+				try?core.startWithSocks5Policy()
 			}
 			self.handleConfigurationChanged(status: .Successful)
 		}
@@ -513,7 +513,7 @@ class CoreContext: ObservableObject {
 			
 			self.mCore.autoIterateEnabled = true
 			
-			try? self.mCore.start()
+			try? self.mCore.startWithSocks5Policy()
 		}
 	}
 	
@@ -527,7 +527,7 @@ class CoreContext: ObservableObject {
 		coreQueue.async {
 			Log.info("[onEnterForegroundOrBackground] Entering foreground")
 
-			try? self.mCore.start()
+			try? self.mCore.startWithSocks5Policy()
 			AppServices.corePreferences.reloadFromConfig()
 		}
 	}

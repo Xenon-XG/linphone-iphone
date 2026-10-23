@@ -279,6 +279,13 @@ class NotificationService: UNNotificationServiceExtension {
 
 		let factoryPath = FileUtil.bundleFilePath("linphonerc-factory")!
 		if let config = Config.newForSharedCore(appGroupId: appGroupName, configFilename: "linphonerc", factoryConfigFilename: factoryPath) {
+   // No Keychain access group is assumed. Never fetch SIP messages directly
+   // when this extension cannot configure the required proxy.
+   guard let proxyDefaults = UserDefaults(suiteName: appGroupName) else { return false }
+   if proxyDefaults.bool(forKey: "socks5.required") || config.getBool(section: "socks5", key: "required", defaultValue: false) {
+    Log.warn("[msgNotificationService] SOCKS5 requires main app; networking skipped")
+    return false
+   }
 			lc = try? Factory.Instance.createSharedCoreWithConfig(config: config, systemContext: nil, appGroupId: appGroupName, mainCore: false)
 			return lc != nil
 		} else {

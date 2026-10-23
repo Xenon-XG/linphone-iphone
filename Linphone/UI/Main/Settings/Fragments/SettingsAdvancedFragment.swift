@@ -68,6 +68,8 @@ struct SettingsAdvancedFragment: View {
 				ScrollView {
 					VStack(spacing: 0) {
 						VStack(spacing: 30) {
+                            Socks5SettingsEditorView()
+
 							VStack(alignment: .leading) {
 								Text("settings_advanced_device_id")
 									.default_text_style_700(styleSize: 15)
@@ -277,4 +279,76 @@ struct SettingsToggleWidget: View {
 			.toggleStyle(SwitchToggleStyle())
 		}
 	}
+}
+
+private struct Socks5SettingsEditorView: View {
+ @State private var enabled = false
+ @State private var host = ""
+ @State private var port = ""
+ @State private var username = ""
+ @State private var password = ""
+ @State private var status = ""
+ @State private var busy = false
+ var body: some View {
+  VStack(alignment: .leading, spacing: 12) {
+   Text("SOCKS5 — experimental audio transport").font(.headline)
+   Toggle("Require SOCKS5 (never fall back to direct)", isOn: $enabled)
+   TextField("Proxy numeric IP (local or remote)", text: $host)
+    .textInputAutocapitalization(.never).autocorrectionDisabled()
+   TextField("Proxy TCP port", text: $port).keyboardType(.numberPad)
+   TextField("Username (empty for no authentication)", text: $username)
+    .textInputAutocapitalization(.never).autocorrectionDisabled()
+   SecureField("Password", text: $password)
+   Text("Requires a custom SDK, SIP/UDP with numeric server addresses, and an SBC/PBX with symmetric RTP. TCP/TLS, video, ICE/STUN/TURN and extension message fetching are not supported. A SOCKS5 connection alone does not establish public media reachability.")
+    .font(.footnote)
+   Button("Save and restart Core", action: apply).disabled(busy)
+   if !status.isEmpty { Text(status).font(.footnote).accessibilityIdentifier("socks5Status") }
+  }
+  .onAppear {
+   CoreContext.shared.doOnCoreQueue { core in
+    guard let config = core.config else { return }
+    let preferences = try? Socks5Settings.preferences()
+    let required = (preferences?.bool(forKey: "socks5.required") ?? false) || config.getBool(section: "socks5", key: "required", defaultValue: false)
+    let address: String? = preferences?.string(forKey: "socks5.host") ?? config.getString(section: "socks5", key: "host", defaultString: "")
+    let number = preferences?.object(forKey: "socks5.port") == nil ? config.getInt(section: "socks5", key: "port", defaultValue: 0) : (preferences?.integer(forKey: "socks5.port") ?? 0)
+    let secret = try? Socks5Settings.readCredentials()
+    DispatchQueue.main.async {
+     enabled = required; host = address ?? ""; port = number == 0 ? "" : String(number)
+     username = secret?.username ?? ""; password = secret?.password ?? ""
+#if !LINPHONE_SOCKS5_SDK
+     status = "Official SDK: enabling SOCKS5 will block Core startup until the local fork is connected."
+#endif
+    }
+   }
+  }
+ }
+ private func apply() {
+  guard !enabled || (!host.isEmpty && !host.contains("\0") && (1...65535).contains(Int(port) ?? 0)) else {
+   status = "Enter a proxy IP and TCP port in 1–65535."; return
+  }
+  let require = enabled, address = host, number = Int(port) ?? 0, user = username, secret = password
+  busy = true
+  CoreContext.shared.doOnCoreQueue { core in
+   do {
+    guard core.callsNb == 0 else { throw CoreError("End all calls before changing the proxy.") }
+    core.stop()
+    guard let config = core.config else { throw CoreError("Core configuration unavailable.") }
+    let preferences = try Socks5Settings.preferences()
+    preferences.set(require, forKey: "socks5.required")
+    preferences.set(address, forKey: "socks5.host")
+    preferences.set(number, forKey: "socks5.port")
+    config.setBool(section: "socks5", key: "required", value: require)
+    config.setString(section: "socks5", key: "host", value: address)
+    config.setInt(section: "socks5", key: "port", value: number)
+    try config.sync()
+    if require { try Socks5Settings.saveCredentials(username: user, password: secret) }
+    else { Socks5Settings.removeCredentials() }
+    try core.startWithSocks5Policy()
+    DispatchQueue.main.async { busy = false; status = require ? "Proxy policy applied. Registration and bidirectional audio still need verification." : "Proxy disabled explicitly." }
+   } catch {
+    let message = (error as? CoreError)?.message ?? "Proxy setup/start failed. Core remains stopped; no direct fallback."
+    DispatchQueue.main.async { busy = false; status = message }
+   }
+  }
+ }
 }

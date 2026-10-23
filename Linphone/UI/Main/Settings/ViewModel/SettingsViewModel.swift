@@ -230,7 +230,7 @@ class SettingsViewModel: ObservableObject {
 				Log.info("\(SettingsViewModel.TAG) Restarting the Core to apply configuration changes")
 				core.stop()
 				Log.info("\(SettingsViewModel.TAG) Core has been stopped, restarting it")
-				try? core.start()
+				try? core.startWithSocks5Policy()
 				Log.info("\(SettingsViewModel.TAG) Core has been restarted")
 			}
 		}

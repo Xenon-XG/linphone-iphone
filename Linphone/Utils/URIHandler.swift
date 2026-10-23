@@ -113,7 +113,7 @@ class URIHandler {
 					core.config?.setString(section: "misc", key: "config-uri", value: urlString)
 					try core.setProvisioninguri(newValue: urlString)
 					core.stop()
-					try core.start()
+					try core.startWithSocks5Policy()
 				} catch {
 					Log.error("[URIHandler] unable to configure the app with \(url.resourceSpecifier) \(error)")
 					toast("Failed_uri_handler_bad_config_address")

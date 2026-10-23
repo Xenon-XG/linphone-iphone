@@ -79,7 +79,7 @@ class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
 						coreContext.doOnCoreQueue { core in
 							try? core.setProvisioninguri(newValue: result)
 							core.stop()
-							try? core.start()
+							try? core.startWithSocks5Policy()
 						}
 					} else {
 						DispatchQueue.main.async {

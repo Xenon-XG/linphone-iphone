@@ -42,6 +42,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Record Xcode version
+        run: xcodebuild -version
       - name: Test package wiring and verified extraction
         run: python3 -I scripts/test-socks5-sdk-tools.py -v
       - name: Download verified SDK into a fresh directory
@@ -65,6 +70,12 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' archive
           ditto -c -k --keepParent build/Socks5-unsigned.xcarchive socks5-ios-unsigned-xcarchive.zip
           shasum -a 256 socks5-ios-unsigned-xcarchive.zip > socks5-ios-unsigned-xcarchive.zip.sha256
+          apps=(build/Socks5-unsigned.xcarchive/Products/Applications/*.app)
+          test "${#apps[@]}" -eq 1
+          mkdir -p build/unsigned-ipa/Payload
+          ditto "${apps[0]}" "build/unsigned-ipa/Payload/$(basename "${apps[0]}")"
+          (cd build/unsigned-ipa && ditto -c -k --keepParent Payload "$GITHUB_WORKSPACE/socks5-ios-unsigned.ipa")
+          shasum -a 256 socks5-ios-unsigned.ipa > socks5-ios-unsigned.ipa.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-unsigned-app-${{ github.sha }}
@@ -72,12 +83,14 @@ jobs:
             socks5-ios-unsigned-xcarchive.zip
             socks5-ios-unsigned-xcarchive.zip.sha256
             sdk-build-used.json
+            socks5-ios-unsigned.ipa
+            socks5-ios-unsigned.ipa.sha256
           if-no-files-found: error
       - name: Publish only an experimental unsigned archive
-        if: inputs.prerelease
+        if: github.event_name == 'push' || inputs.prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "socks5-app-${GITHUB_RUN_ID}" socks5-ios-unsigned-xcarchive.zip socks5-ios-unsigned-xcarchive.zip.sha256 sdk-build-used.json \
+          gh release create "socks5-app-${GITHUB_RUN_ID}" socks5-ios-unsigned-xcarchive.zip socks5-ios-unsigned-xcarchive.zip.sha256 sdk-build-used.json socks5-ios-unsigned.ipa socks5-ios-unsigned.ipa.sha256 \
             --target "$GITHUB_SHA" --prerelease --title "Experimental unsigned SOCKS5 iOS app ${GITHUB_SHA:0:12}" \
-            --notes 'UNSIGNED XCARCHIVE, NOT AN INSTALLABLE IPA. Requires developer signing/provisioning and valid APNs entitlements. CallKit/PushKit source is retained; this build does not grant APNs credentials. UDP signaling/audio only, symmetric-RTP SBC/PBX required. Compilation is not a successful real-device bidirectional-call test.'
+            --notes 'UNSIGNED XCARCHIVE AND UNSIGNED IPA FOR RESIGNING; neither can be installed directly. Requires developer signing/provisioning and valid APNs entitlements. CallKit/PushKit source is retained; this build does not grant APNs credentials. UDP signaling/audio only, symmetric-RTP SBC/PBX required. Compilation is not a successful real-device bidirectional-call test.'
